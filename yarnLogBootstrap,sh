@@ -1,0 +1,13 @@
+#!/bin/bash
+sudo pip3 install elasticsearch watchdog 
+
+# Optional: Configure environment variables
+export SPARK_LOGS_DIR=/home/hadoop/logs/userlogs # TODO: Change this to the correct directory
+export ES_HOST=localhost # TODO: Change this to the correct host
+export ES_PORT=9200 # TODO: Change this to the correct port
+export ES_INDEX=yarn_logs # TODO: Change this to the correct index
+
+# Copy your log monitoring script
+sudo cp yarn_log_monitor.py /usr/local/bin/ # TODO: Change this to the correct path
+# Start the script
+sudo python3 /usr/local/bin/yarn_log_monitor.py &
