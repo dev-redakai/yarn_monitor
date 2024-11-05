@@ -6,6 +6,14 @@ export SPARK_LOGS_DIR=/home/hadoop/logs/userlogs # TODO: Change this to the corr
 export ES_HOST=localhost # TODO: Change this to the correct host
 export ES_PORT=9200 # TODO: Change this to the correct port
 export ES_INDEX=yarn_logs # TODO: Change this to the correct index
+export ES_SCHEME=https
+export ES_USERNAME=elastic
+export ES_PASSWORD=A4DtL95L1TWUQwPbfuiG
+export YARN_LOG_DIR=/home/hadoop/hadoop/logs/userlogs
+export YARN_LOG_FILE=/home/redakai/spark_workspace/yarn_monitor/log/yarn_log_monitor.log
+export ES_API_KEY="WkQweTZKSUJYSzBlSGktSUpVS1I6MEJkV1RXS1NUQk9VdFNvcW5uOTdDdw=="
+export ES_INDEX=yarn_logs
+
 
 # Copy your log monitoring script
 sudo cp yarn_log_monitor.py /usr/local/bin/ # TODO: Change this to the correct path

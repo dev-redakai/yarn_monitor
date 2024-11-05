@@ -1,0 +1,6 @@
+# Adding files to ignore
+*.log
+*.log.*
+./venv
+./venv/*
+
