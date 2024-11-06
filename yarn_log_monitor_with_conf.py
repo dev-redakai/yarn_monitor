@@ -2,182 +2,14 @@ import os
 import time
 import json
 import logging
-from abc import ABC, abstractmethod
-from typing import List, Dict, Any, Optional
-from datetime import datetime
-from elasticsearch import Elasticsearch
+from typing import List, Dict, Any
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
-import boto3
-import psycopg2
-from psycopg2.extras import Json
+from utility.log_storage_backend import LogStorageBackend
+from utility.elasticsearch_backend import ElasticsearchBackend
+from utility.s3_backend import S3Backend
+from utility.postgres_backend import PostgresBackend
 
-class LogStorageBackend(ABC):
-    """Abstract base class for log storage backends"""
-    
-    @abstractmethod
-    def store_log(self, log_metadata: Dict[str, Any]) -> bool:
-        """Store log data in the backend"""
-        pass
-
-    @abstractmethod
-    def initialize(self) -> bool:
-        """Initialize the storage backend"""
-        pass
-
-class ElasticsearchBackend(LogStorageBackend):
-    def __init__(self, config: Dict[str, Any]):
-        self.es_client = None
-        self.es_index = config['index']
-        self.config = config
-        self.logger = logging.getLogger(__name__)
-
-    def initialize(self) -> bool:
-        try:
-            es_config = {
-                'hosts': f"{self.config['scheme']}://{self.config['host']}:{self.config['port']}",
-                'basic_auth': (self.config['user'], self.config['password'])
-            }
-
-            if self.config['scheme'] == 'https':
-                es_config['verify_certs'] = False
-
-            self.es_client = Elasticsearch(**es_config)
-            
-            if not self.es_client.indices.exists(index=self.es_index):
-                index_mapping = {
-                    "mappings": {
-                        "properties": {
-                            "file_path": {"type": "keyword"},
-                            "application_id": {"type": "keyword"},
-                            "container_id": {"type": "keyword"},
-                            "timestamp": {"type": "date"},
-                            "log_content": {"type": "text"}
-                        }
-                    }
-                }
-                self.es_client.indices.create(index=self.es_index, body=index_mapping)
-                
-            return True
-        except Exception as e:
-            self.logger.error(f"Elasticsearch initialization error: {e}")
-            return False
-
-    def store_log(self, log_metadata: Dict[str, Any]) -> bool:
-        try:
-            res = self.es_client.index(
-                index=self.es_index,
-                document=log_metadata
-            )
-            return res['result'] in ['created', 'updated']
-        except Exception as e:
-            self.logger.error(f"Error storing log in Elasticsearch: {e}")
-            return False
-
-class S3Backend(LogStorageBackend):
-    def __init__(self, config: Dict[str, Any]):
-        self.bucket = config['bucket']
-        self.prefix = config.get('prefix', 'yarn-logs')
-        self.config = config
-        self.s3_client = None
-        self.logger = logging.getLogger(__name__)
-
-    def initialize(self) -> bool:
-        try:
-            self.s3_client = boto3.client(
-                's3',
-                aws_access_key_id=self.config['aws_access_key_id'],
-                aws_secret_access_key=self.config['aws_secret_access_key'],
-                region_name=self.config['region']
-            )
-            return True
-        except Exception as e:
-            self.logger.error(f"S3 initialization error: {e}")
-            return False
-
-    def store_log(self, log_metadata: Dict[str, Any]) -> bool:
-        try:
-            # Create S3 key based on application ID and timestamp
-            timestamp = datetime.fromtimestamp(log_metadata['timestamp'])
-            s3_key = f"{self.prefix}/{timestamp.strftime('%Y/%m/%d')}/{log_metadata['application_id']}/{log_metadata['file_name']}"
-            
-            # Store both raw log content and metadata
-            self.s3_client.put_object(
-                Bucket=self.bucket,
-                Key=s3_key,
-                Body=log_metadata['log_content']
-            )
-            
-            # Store metadata as separate JSON file
-            metadata_key = f"{s3_key}.metadata.json"
-            self.s3_client.put_object(
-                Bucket=self.bucket,
-                Key=metadata_key,
-                Body=json.dumps(log_metadata)
-            )
-            
-            return True
-        except Exception as e:
-            self.logger.error(f"Error storing log in S3: {e}")
-            return False
-
-class PostgresBackend(LogStorageBackend):
-    def __init__(self, config: Dict[str, Any]):
-        self.config = config
-        self.conn = None
-        self.logger = logging.getLogger(__name__)
-
-    def initialize(self) -> bool:
-        try:
-            self.conn = psycopg2.connect(
-                dbname=self.config['dbname'],
-                user=self.config['user'],
-                password=self.config['password'],
-                host=self.config['host'],
-                port=self.config['port']
-            )
-            
-            # Create table if it doesn't exist
-            with self.conn.cursor() as cur:
-                cur.execute("""
-                    CREATE TABLE IF NOT EXISTS yarn_logs (
-                        id SERIAL PRIMARY KEY,
-                        file_path VARCHAR(1024),
-                        file_name VARCHAR(256),
-                        application_id VARCHAR(256),
-                        container_id VARCHAR(256),
-                        timestamp TIMESTAMP,
-                        log_content TEXT,
-                        metadata JSONB
-                    )
-                """)
-            self.conn.commit()
-            return True
-        except Exception as e:
-            self.logger.error(f"Postgres initialization error: {e}")
-            return False
-
-    def store_log(self, log_metadata: Dict[str, Any]) -> bool:
-        try:
-            with self.conn.cursor() as cur:
-                cur.execute("""
-                    INSERT INTO yarn_logs 
-                    (file_path, file_name, application_id, container_id, timestamp, log_content, metadata)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
-                """, (
-                    log_metadata['file_path'],
-                    log_metadata['file_name'],
-                    log_metadata['application_id'],
-                    log_metadata['container_id'],
-                    datetime.fromtimestamp(log_metadata['timestamp']),
-                    log_metadata['log_content'],
-                    Json(log_metadata)
-                ))
-            self.conn.commit()
-            return True
-        except Exception as e:
-            self.logger.error(f"Error storing log in Postgres: {e}")
-            return False
 
 class SparkLogHandler:
     def __init__(self, logs_dir: str, storage_backends: List[LogStorageBackend], log_level: str = 'INFO'):
@@ -299,7 +131,7 @@ if __name__ == "__main__":
     import sys
     
     if len(sys.argv) != 2:
-        print("Usage: python yarn_log_monitor.py <config_file>")
+        print("Usage: python yarn_log_monitor_with_conf.py <config_file>")
         sys.exit(1)
         
     main(sys.argv[1])

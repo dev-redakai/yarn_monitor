@@ -3,4 +3,8 @@
 *.log.*
 ./venv
 ./venv/*
+./.vscode
+./.vscode/*
+./.idea
+./.idea/*
 

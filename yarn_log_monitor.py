@@ -7,11 +7,12 @@ from elasticsearch import Elasticsearch
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
+
 class SparkLogHandler:
-    def __init__(self, 
-                 logs_dir: str, 
-                 es_host: str, 
-                 es_port: int, 
+    def __init__(self,
+                 logs_dir: str,
+                 es_host: str,
+                 es_port: int,
                  es_index: str,
                  es_scheme: str,
                  es_user: str,
@@ -44,8 +45,8 @@ class SparkLogHandler:
         try:
             # Prepare Elasticsearch connection configuration
             es_config = {
-                'hosts': f'{es_host}:{es_port}',
-                'http_auth': (es_user, es_password)
+                'hosts': f'{es_scheme}://{es_host}:{es_port}',
+                'basic_auth': (es_user, es_password)
             }
 
             # API Key Authentication
@@ -63,14 +64,14 @@ class SparkLogHandler:
             if es_scheme == 'https':
                 es_config['verify_certs'] = False
 
-            print("es_config before creating client ",es_config)
+            print("es_config before creating client ", es_config)
             # Create Elasticsearch client
             self.es_client = Elasticsearch(**es_config)
-            
+
             # Verify connection
             cluster_info = self.es_client.info()
             self.logger.info(f"Connected to Elasticsearch cluster: {cluster_info['cluster_name']}")
-            
+
             # Create index if not exists
             if not self.es_client.indices.exists(index=es_index):
                 # Create index with dynamic mapping for flexible log indexing
@@ -87,7 +88,7 @@ class SparkLogHandler:
                 }
                 self.es_client.indices.create(index=es_index, body=index_mapping)
                 self.logger.info(f"Created Elasticsearch index: {es_index}")
-            
+
         except Exception as e:
             self.logger.error(f"Elasticsearch connection error: {e}")
             raise
@@ -102,15 +103,15 @@ class SparkLogHandler:
         try:
             # Split path components
             parts = log_path.split(os.sep)
-            
+
             # Extract application and container IDs
             app_id = next((p for p in parts if p.startswith('application_')), None)
             container_id = next((p for p in parts if p.startswith('container_')), None)
-            
+
             # Read log content
             with open(log_path, 'r', encoding='utf-8') as f:
                 log_content = f.read()
-            
+
             return {
                 'file_path': log_path,
                 'file_name': log_path.split(os.sep)[-1],
@@ -119,7 +120,7 @@ class SparkLogHandler:
                 'timestamp': time.time(),
                 'log_content': log_content
             }
-        
+
         except Exception as e:
             self.logger.error(f"Error parsing log metadata for {log_path}: {e}")
             return {}
@@ -132,17 +133,18 @@ class SparkLogHandler:
         """
         try:
             log_metadata = self._parse_log_metadata(log_path)
-            
+
             if log_metadata:
                 # Index document to Elasticsearch with automatic ID generation
                 res = self.es_client.index(
-                    index=self.es_index, 
+                    index=self.es_index,
                     document=log_metadata
                 )
                 self.logger.info(f"Indexed log: {log_path}, ES Response: {res['result']}")
-        
+
         except Exception as e:
             self.logger.error(f"Error indexing log {log_path}: {e}")
+
 
 class SparkLogFileHandler(FileSystemEventHandler):
     def __init__(self, log_handler: SparkLogHandler):
@@ -162,9 +164,10 @@ class SparkLogFileHandler(FileSystemEventHandler):
         if not event.is_directory:
             self.log_handler.index_log(event.src_path)
 
-def main(logs_dir: str, 
-         es_host: str = 'localhost', 
-         es_port: int = 9200, 
+
+def main(logs_dir: str,
+         es_host: str = 'localhost',
+         es_port: int = 9200,
          es_index: str = 'yarn_logs',
          es_scheme: str = 'https',
          es_user: str = 'elastic',
@@ -174,6 +177,8 @@ def main(logs_dir: str,
     """
     Main function to start log monitoring.
     
+    :param es_password:
+    :param es_user:
     :param logs_dir: Directory containing Spark/Hadoop user logs
     :param es_host: Elasticsearch host
     :param es_port: Elasticsearch port
@@ -183,9 +188,9 @@ def main(logs_dir: str,
     :param poll_interval: Polling interval for file system events
     """
     log_handler = SparkLogHandler(
-        logs_dir=logs_dir, 
-        es_host=es_host, 
-        es_port=es_port, 
+        logs_dir=logs_dir,
+        es_host=es_host,
+        es_port=es_port,
         es_index=es_index,
         es_scheme=es_scheme,
         es_user=es_user,
@@ -197,19 +202,20 @@ def main(logs_dir: str,
     event_handler = SparkLogFileHandler(log_handler)
     observer = Observer()
     observer.schedule(event_handler, logs_dir, recursive=True)
-    
+
     try:
         observer.start()
         print(f"Monitoring {logs_dir} for new log files...")
-        
+
         # Keep script running
         while True:
             time.sleep(poll_interval)
-    
+
     except KeyboardInterrupt:
         observer.stop()
-    
+
     observer.join()
+
 
 if __name__ == "__main__":
     # Example usage with environment variables or default values
