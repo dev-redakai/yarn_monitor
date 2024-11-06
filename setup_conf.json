@@ -1,0 +1,32 @@
+{
+    "logs_dir": "/home/redakai/hadoop/logs/userlogs",
+    "log_level": "INFO",
+    
+    "elasticsearch": {
+        "enabled": true,
+        "host": "localhost",
+        "port": 9200,
+        "scheme": "https",
+        "user": "elastic",
+        "password": "A4DtL95L1TWUQwPbfuiG",
+        "index": "yarn_logs"
+    },
+    
+    "s3": {
+        "enabled": false,
+        "aws_access_key_id": "your-access-key",
+        "aws_secret_access_key": "your-secret-key",
+        "region": "us-west-2",
+        "bucket": "your-bucket-name",
+        "prefix": "yarn-logs"
+    },
+    
+    "postgres": {
+        "enabled": false,
+        "host": "localhost",
+        "port": 5432,
+        "dbname": "yarn_logs",
+        "user": "postgres",
+        "password": "your-password"
+    }
+}
