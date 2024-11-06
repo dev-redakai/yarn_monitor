@@ -28,7 +28,7 @@ A robust Python-based monitoring system for Apache YARN and Spark logs with flex
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/yarn-log-monitor.git
+git clone https://github.com/dev-redakai/yarn_monitor.git
 cd yarn-log-monitor
 ```
 
