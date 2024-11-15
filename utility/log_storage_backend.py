@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Dict, Any
 
-class LogStorageBackend(abc.ABC):
+class LogStorageBackend(ABC):
     """Abstract base class for log storage backends"""
     
     @abstractmethod

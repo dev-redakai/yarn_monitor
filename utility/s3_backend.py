@@ -16,8 +16,6 @@ class S3Backend(LogStorageBackend):
         try:
             self.s3_client = boto3.client(
                 's3',
-                aws_access_key_id=self.config['aws_access_key_id'],
-                aws_secret_access_key=self.config['aws_secret_access_key'],
                 region_name=self.config['region']
             )
             return True
@@ -29,7 +27,7 @@ class S3Backend(LogStorageBackend):
         try:
             # Create S3 key based on application ID and timestamp
             timestamp = datetime.fromtimestamp(log_metadata['timestamp'])
-            s3_key = f"{self.prefix}/{timestamp.strftime('%Y/%m/%d')}/{log_metadata['application_id']}/{log_metadata['file_name']}"
+            s3_key = f"{self.prefix}/{timestamp.strftime('%Y/%m/%d')}/{log_metadata['step_id']}/{log_metadata['file_name']}"
             
             # Store both raw log content and metadata
             self.s3_client.put_object(

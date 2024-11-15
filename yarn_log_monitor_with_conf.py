@@ -143,43 +143,6 @@ class SparkLogHandler:
         except Exception as e:
             self.logger.error(f"Error indexing log {log_path}: {str(e)}", exc_info=True)
 
-'''
-    def _parse_log_metadata(self, log_path: str) -> Dict[str, Any]:
-        """Parse log metadata from file path"""
-        try:
-            parts = log_path.split(os.sep)
-            app_id = next((p for p in parts if p.startswith('application_')), None)
-            container_id = next((p for p in parts if p.startswith('container_')), None)
-
-            with open(log_path, 'r', encoding='utf-8') as f:
-                log_content = f.read()
-
-            return {
-                'file_path': log_path,
-                'file_name': os.path.basename(log_path),
-                'application_id': app_id,
-                'container_id': container_id,
-                'timestamp': time.time(),
-                'log_content': log_content
-            }
-        except Exception as e:
-            self.logger.error(f"Error parsing log metadata for {log_path}: {e}")
-            return {}
-
-    def index_log(self, log_path: str):
-        """Index log file to all configured storage backends"""
-        try:
-            log_metadata = self._parse_log_metadata(log_path)
-            if log_metadata:
-                for backend in self.storage_backends:
-                    success = backend.store_log(log_metadata)
-                    if success:
-                        self.logger.info(f"Successfully stored log in {backend.__class__.__name__}: {log_path}")
-                    else:
-                        self.logger.error(f"Failed to store log in {backend.__class__.__name__}: {log_path}")
-        except Exception as e:
-            self.logger.error(f"Error indexing log {log_path}: {e}")
-'''
 
 class SparkLogFileHandler(FileSystemEventHandler):
     def __init__(self, log_handler: SparkLogHandler):
