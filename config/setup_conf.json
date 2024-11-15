@@ -1,9 +1,9 @@
 {
-    "logs_dir": "/home/redakai/hadoop/logs/userlogs",
+    "logs_dir": "/var/log/hadoop",
     "log_level": "INFO",
     
     "elasticsearch": {
-        "enabled": true,
+        "enabled": false,
         "host": "localhost",
         "port": 9200,
         "scheme": "https",
@@ -13,11 +13,9 @@
     },
     
     "s3": {
-        "enabled": false,
-        "aws_access_key_id": "your-access-key",
-        "aws_secret_access_key": "your-secret-key",
-        "region": "us-west-2",
-        "bucket": "your-bucket-name",
+        "enabled": true,
+        "region": "us-east-1",
+        "bucket": "atomhub-data",
         "prefix": "yarn-logs"
     },
     
