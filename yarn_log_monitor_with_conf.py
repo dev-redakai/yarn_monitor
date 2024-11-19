@@ -44,6 +44,7 @@ class SparkLogHandler:
         :return: Dictionary containing parsed metadata
         """
         try:
+            print(f"Parsing log metadata for {log_path}")
             # Split path into components
             parts = log_path.split(os.sep)
             
@@ -53,9 +54,36 @@ class SparkLogHandler:
             # Determine log type (controller, stderr, stdout, syslog)
             log_type = next((p for p in parts if p in ['controller', 'stderr', 'stdout', 'syslog']), None)
             
-            # Read log content
-            with open(log_path, 'r', encoding='utf-8', errors='replace') as f:
-                log_content = f.read()
+            # Read log content with retries
+            log_content = ''
+            max_retries = 5
+            retry_count = 0
+
+            while log_content=='' and retry_count < max_retries:
+                try:
+                    with open(log_path, 'r', encoding='utf-8', errors='replace') as f:
+                        log_content = f.read()
+
+                    if log_content=='':
+                        self.logger.debug(f"Empty log content on attempt {retry_count + 1}, retrying...")
+                        print(f"Empty log content on attempt {retry_count + 1}, retrying...")
+                        retry_count += 1
+                        time.sleep(30)
+                    else:
+                        self.logger.debug(f"Successfully read log content on attempt {retry_count + 1}")
+                        print(f"Successfully read log content on attempt {retry_count + 1}")
+                except Exception as e:
+                    self.logger.warning(f"Error reading log on attempt {retry_count + 1}: {str(e)}")
+                    print(f"Error reading log on attempt {retry_count + 1}: {str(e)}")
+                    retry_count += 1
+                    time.sleep(30)
+
+            if log_content=='':
+                self.logger.warning(f"Failed to read log content after {retry_count} attempts")
+                print(f"Failed to read log content after {retry_count} attempts")
+                log_content = '##No Content##'
+            self.logger.debug(f"Log content length: {len(log_content)}")
+            print(f"Log content length: {len(log_content)}")
                 
             # Get file stats
             file_stats = os.stat(log_path)
@@ -89,6 +117,8 @@ class SparkLogHandler:
             # Log successful parsing
             self.logger.debug(f"Successfully parsed metadata for {log_path}: "
                             f"step_id={step_id}, log_type={log_type}")
+            
+            print(f"Metadata: {metadata}")
             
             return metadata
 
