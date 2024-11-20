@@ -12,170 +12,6 @@ from utility.elasticsearch_backend import ElasticsearchBackend
 from utility.s3_backend import S3Backend
 from utility.postgres_backend import PostgresBackend
 
-'''
-class SparkLogHandler:
-    def __init__(self, logs_dir: str, storage_backends: List[LogStorageBackend], log_level: str = 'INFO'):
-        """
-        Initialize SparkLogHandler with multiple storage backends
-        
-        :param logs_dir: Directory containing Spark/Hadoop user logs
-        :param storage_backends: List of storage backend instances
-        :param log_level: Logging level
-        """
-        logging.basicConfig(
-            level=getattr(logging, log_level.upper()),
-            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-        )
-        self.logger = logging.getLogger(__name__)
-        self.logs_dir = logs_dir
-        self.storage_backends = storage_backends
-        
-        # Initialize all storage backends
-        for backend in storage_backends:
-            if not backend.initialize():
-                self.logger.error(f"Failed to initialize {backend.__class__.__name__}")
-                
-    def _parse_log_metadata(self, log_path: str) -> Dict[str, Any]:
-        """
-        Parse log metadata from Airflow/Hadoop log file path
-        
-        Expected structure:
-        /var/log/hadoop/steps/s-{STEP_ID}/{log_type}/...
-        
-        :param log_path: Path to log file
-        :return: Dictionary containing parsed metadata
-        """
-        try:
-            print(f"Parsing log metadata for {log_path}")
-            # Split path into components
-            parts = log_path.split(os.sep)
-            
-            # Extract step ID (format: s-XXXXXXXXXXXXXXXXX)
-            step_id = next((p for p in parts if p.startswith('s-')), None)
-            
-            # Determine log type (controller, stderr, stdout, syslog)
-            log_type = next((p for p in parts if p in ['controller', 'stderr', 'stdout', 'syslog']), None)
-            
-            # Read log content with retries
-            log_content = ''
-            max_retries = 5
-            retry_count = 0
-
-            while log_content=='' and retry_count < max_retries:
-                try:
-                    with open(log_path, 'r', encoding='utf-8', errors='replace') as f:
-                        log_content = f.read()
-
-                    if log_content=='':
-                        self.logger.debug(f"Empty log content on attempt {retry_count + 1}, retrying...")
-                        print(f"Empty log content on attempt {retry_count + 1}, retrying...")
-                        retry_count += 1
-                        time.sleep(30)
-                    else:
-                        self.logger.debug(f"Successfully read log content on attempt {retry_count + 1}")
-                        print(f"Successfully read log content on attempt {retry_count + 1}")
-                except Exception as e:
-                    self.logger.warning(f"Error reading log on attempt {retry_count + 1}: {str(e)}")
-                    print(f"Error reading log on attempt {retry_count + 1}: {str(e)}")
-                    retry_count += 1
-                    time.sleep(30)
-
-            if log_content=='':
-                self.logger.warning(f"Failed to read log content after {retry_count} attempts")
-                print(f"Failed to read log content after {retry_count} attempts")
-                log_content = '##No Content##'
-            self.logger.debug(f"Log content length: {len(log_content)}")
-            print(f"Log content length: {len(log_content)}")
-                
-            # Get file stats
-            file_stats = os.stat(log_path)
-            
-            # Build metadata dictionary
-            metadata = {
-                'file_path': log_path,
-                'file_name': os.path.basename(log_path),
-                'step_id': step_id,
-                'log_type': log_type,
-                'timestamp': time.time(),
-                'created_at': file_stats.st_ctime,
-                'modified_at': file_stats.st_mtime,
-                'file_size': file_stats.st_size,
-                'log_content': log_content,
-                'metadata': {
-                    'hadoop_root': '/var/log/hadoop',
-                    'is_step_log': 'steps' in parts,
-                    'log_directory': os.path.dirname(log_path),
-                    'parent_directory': parts[-2] if len(parts) > 1 else None,
-                }
-            }
-            
-            # Add additional parser metadata for debugging
-            metadata['parser_info'] = {
-                'path_parts': parts,
-                'parse_timestamp': datetime.datetime.now().isoformat(),
-                'parser_version': '1.0'
-            }
-            
-            # Log successful parsing
-            self.logger.debug(f"Successfully parsed metadata for {log_path}: "
-                            f"step_id={step_id}, log_type={log_type}")
-            
-            print(f"Metadata: {metadata}")
-            
-            return metadata
-
-        except Exception as e:
-            self.logger.error(f"Error parsing log metadata for {log_path}: {str(e)}", 
-                            exc_info=True)
-            return {}
-
-    def index_log(self, log_path: str):
-        """Index log file to all configured storage backends"""
-        try:
-            # Skip temporary or system files
-            if any(p in log_path for p in ['.tmp', '.swp', '.bak']):
-                self.logger.debug(f"Skipping temporary file: {log_path}")
-                return
-                
-            # Parse metadata
-            log_metadata = self._parse_log_metadata(log_path)
-            
-            if log_metadata:
-                # Add some basic validation
-                required_fields = ['step_id', 'log_type', 'log_content']
-                missing_fields = [f for f in required_fields if not log_metadata.get(f)]
-                
-                if missing_fields:
-                    self.logger.warning(f"Missing required fields {missing_fields} for {log_path}")
-                    return
-                    
-                # Store in each backend
-                for backend in self.storage_backends:
-                    try:
-                        success = backend.store_log(log_metadata)
-                        if success:
-                            self.logger.info(
-                                f"Successfully stored log in {backend.__class__.__name__}: "
-                                f"{log_path} (step_id={log_metadata['step_id']}, "
-                                f"type={log_metadata['log_type']})"
-                            )
-                        else:
-                            self.logger.error(
-                                f"Failed to store log in {backend.__class__.__name__}: "
-                                f"{log_path}"
-                            )
-                    except Exception as be:
-                        self.logger.error(
-                            f"Backend {backend.__class__.__name__} error for {log_path}: {str(be)}",
-                            exc_info=True
-                        )
-            else:
-                self.logger.warning(f"No metadata could be parsed for {log_path}")
-                
-        except Exception as e:
-            self.logger.error(f"Error indexing log {log_path}: {str(e)}", exc_info=True)
-'''
-
 class SparkLogHandler:
     def __init__(self, logs_dir: str, storage_backends: List[LogStorageBackend], emr_client, log_level: str = 'INFO'):
         """
@@ -199,6 +35,7 @@ class SparkLogHandler:
         steps = self.emr_client.list_steps(ClusterId=cluster_id, StepStates=['PENDING', 'RUNNING'])['Steps']
         with self.lock:
             self.running_steps = {step['Id']: time.time() for step in steps}
+            
 
     def upload_logs(self, step_id: str, cluster_id: str):
         """
@@ -213,14 +50,14 @@ class SparkLogHandler:
                 if os.path.exists(log_file):
                     with open(log_file, 'r') as file:
                         log_content = file.read()
-                    log_metadata = {
-                        "step_id": step_id,
-                        "log_type": log_type,
-                        "log_content": log_content,
-                        "timestamp": time.time()
-                    }
-                    for backend in self.storage_backends:
-                        backend.store_log(log_metadata, cluster_id)
+                        log_metadata = {
+                            "step_id": step_id,
+                            "log_type": log_type,
+                            "log_content": log_content,
+                            "timestamp": time.time()
+                        }
+                        for backend in self.storage_backends:
+                            backend.store_log(log_metadata, cluster_id)
 
             # Stop monitoring if step is not running and 1 minute has passed
             with self.lock:
@@ -228,6 +65,20 @@ class SparkLogHandler:
                     break
 
             time.sleep(10)
+            
+    def process_log(self, log_path: str, cluster_id: str):
+        """
+        Process a single log file and delegate to upload_logs for handling updates.
+        """
+        # Extract step ID and log type from the path
+        parts = log_path.split(os.sep)
+        step_id = next((p for p in parts if p.startswith('s-')), None)
+        log_type = os.path.basename(log_path)
+
+        if step_id and log_type:
+            self.logger.info(f"Processing log file: {log_path}")
+            # Delegate to upload_logs to handle updates for this step/log
+            self.upload_logs(step_id, cluster_id)
 
     def monitor_steps(self, cluster_id: str):
         """
@@ -243,14 +94,24 @@ class SparkLogHandler:
             time.sleep(10)  # Check for new steps every 10 seconds
 
 class SparkLogFileHandler(FileSystemEventHandler):
-    def __init__(self, log_handler: SparkLogHandler):
+    """
+    Watchdog event handler for detecting file changes.
+    """
+    def __init__(self, log_handler: SparkLogHandler, cluster_id: str):
         self.log_handler = log_handler
+        self.cluster_id = cluster_id
 
     def on_created(self, event):
         if not event.is_directory:
-            self.log_handler.index_log(event.src_path)
-            
-            
+            self.log_handler.logger.info(f"New file detected: {event.src_path}")
+            self.log_handler.process_log(event.src_path, self.cluster_id)
+
+    def on_modified(self, event):
+        if not event.is_directory:
+            self.log_handler.logger.info(f"File modified: {event.src_path}")
+            self.log_handler.process_log(event.src_path, self.cluster_id)
+
+
 def fetch_cluster_id() -> str:
     """
     Fetch the current EMR cluster ID using a bash command to parse job-flow.json.
@@ -315,8 +176,8 @@ def main(config_file: str):
         )
         threading.Thread(target=log_handler.monitor_steps, args=(cluster_id,)).start()
 
-        # Set up file system observer
-        event_handler = SparkLogFileHandler(log_handler)
+        # Set up file system observer with more robust error handling
+        event_handler = SparkLogFileHandler(log_handler, cluster_id)
         observer = Observer()
         observer.schedule(event_handler, config['logs_dir'], recursive=True)
 
