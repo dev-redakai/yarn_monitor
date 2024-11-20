@@ -200,7 +200,7 @@ class SparkLogHandler:
         with self.lock:
             self.running_steps = {step['Id']: time.time() for step in steps}
 
-    def upload_logs(self, step_id: str):
+    def upload_logs(self, step_id: str, cluster_id: str):
         """
         Continuously upload logs for a specific step ID.
         """
@@ -220,7 +220,7 @@ class SparkLogHandler:
                         "timestamp": time.time()
                     }
                     for backend in self.storage_backends:
-                        backend.store_log(log_metadata)
+                        backend.store_log(log_metadata, cluster_id)
 
             # Stop monitoring if step is not running and 1 minute has passed
             with self.lock:
@@ -237,7 +237,7 @@ class SparkLogHandler:
             self.fetch_running_steps(cluster_id)
 
             for step_id in list(self.running_steps):
-                thread = threading.Thread(target=self.upload_logs, args=(step_id,))
+                thread = threading.Thread(target=self.upload_logs, args=(step_id, cluster_id, ))
                 thread.start()
 
             time.sleep(10)  # Check for new steps every 10 seconds
@@ -294,7 +294,7 @@ def main(config_file: str):
             storage_backends.append(ElasticsearchBackend(config['elasticsearch']))
             
         if config.get('s3', {}).get('enabled', False):
-            storage_backends.append(S3Backend(config['s3']))
+            storage_backends.append(S3Backend(config['s3'], cluster_id))
             
         if config.get('postgres', {}).get('enabled', False):
             storage_backends.append(PostgresBackend(config['postgres']))

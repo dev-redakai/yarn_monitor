@@ -24,11 +24,11 @@ class S3Backend(LogStorageBackend):
             self.logger.error(f"S3 initialization error: {e}")
             return False
 
-    def store_log(self, log_metadata: Dict[str, Any]) -> bool:
+    def store_log(self, log_metadata: Dict[str, Any], cluster_id: str) -> bool:
         try:
             # Create S3 key based on cluster ID, step ID, and timestamp
             timestamp = datetime.fromtimestamp(log_metadata['timestamp'])
-            s3_key = f"{self.prefix}/{timestamp.strftime('log_date=%Y-%m-%d')}/{self.cluster_id}/{log_metadata['step_id']}/{log_metadata['log_type']}/{timestamp}.log"
+            s3_key = f"{self.prefix}/{timestamp.strftime('log_date=%Y-%m-%d')}/{cluster_id}/{log_metadata['step_id']}/{log_metadata['log_type']}/{timestamp}.log"
             
             # Store both raw log content and metadata
             self.s3_client.put_object(
