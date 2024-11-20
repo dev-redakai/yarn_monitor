@@ -5,10 +5,11 @@ from datetime import datetime
 from utility.log_storage_backend import LogStorageBackend
 
 class S3Backend(LogStorageBackend):
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Dict[str, Any], cluster_id: str):
         self.bucket = config['bucket']
         self.prefix = config.get('prefix', 'yarn-logs')
         self.config = config
+        self.cluster_id = cluster_id
         self.s3_client = None
         self.logger = logging.getLogger(__name__)
 
@@ -25,9 +26,9 @@ class S3Backend(LogStorageBackend):
 
     def store_log(self, log_metadata: Dict[str, Any]) -> bool:
         try:
-            # Create S3 key based on application ID and timestamp
+            # Create S3 key based on cluster ID, step ID, and timestamp
             timestamp = datetime.fromtimestamp(log_metadata['timestamp'])
-            s3_key = f"{self.prefix}/{timestamp.strftime('%Y/%m/%d')}/{log_metadata['step_id']}/{log_metadata['file_name']}"
+            s3_key = f"{self.prefix}/{timestamp.strftime('log_date=%Y-%m-%d')}/{self.cluster_id}/{log_metadata['step_id']}/{log_metadata['log_type']}/{timestamp}.log"
             
             # Store both raw log content and metadata
             self.s3_client.put_object(

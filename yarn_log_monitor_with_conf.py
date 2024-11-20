@@ -2,6 +2,8 @@ import os
 import time
 import json
 import logging, datetime
+import subprocess, boto3
+import threading
 from typing import List, Dict, Any
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
@@ -10,7 +12,7 @@ from utility.elasticsearch_backend import ElasticsearchBackend
 from utility.s3_backend import S3Backend
 from utility.postgres_backend import PostgresBackend
 
-
+'''
 class SparkLogHandler:
     def __init__(self, logs_dir: str, storage_backends: List[LogStorageBackend], log_level: str = 'INFO'):
         """
@@ -172,7 +174,73 @@ class SparkLogHandler:
                 
         except Exception as e:
             self.logger.error(f"Error indexing log {log_path}: {str(e)}", exc_info=True)
+'''
 
+class SparkLogHandler:
+    def __init__(self, logs_dir: str, storage_backends: List[LogStorageBackend], emr_client, log_level: str = 'INFO'):
+        """
+        Initialize SparkLogHandler with multiple storage backends and EMR client
+        """
+        logging.basicConfig(
+            level=getattr(logging, log_level.upper()),
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        )
+        self.logger = logging.getLogger(__name__)
+        self.logs_dir = logs_dir
+        self.storage_backends = storage_backends
+        self.emr_client = emr_client
+        self.running_steps = {}
+        self.lock = threading.Lock()
+
+    def fetch_running_steps(self, cluster_id: str):
+        """
+        Fetch running steps from EMR.
+        """
+        steps = self.emr_client.list_steps(ClusterId=cluster_id, StepStates=['PENDING', 'RUNNING'])['Steps']
+        with self.lock:
+            self.running_steps = {step['Id']: time.time() for step in steps}
+
+    def upload_logs(self, step_id: str):
+        """
+        Continuously upload logs for a specific step ID.
+        """
+        step_log_dir = os.path.join(self.logs_dir, f"s-{step_id}")
+        self.logger.info(f"Monitoring logs for step: {step_id}")
+
+        while True:
+            for log_type in ['controller', 'stderr', 'stdout', 'syslog']:
+                log_file = os.path.join(step_log_dir, log_type)
+                if os.path.exists(log_file):
+                    with open(log_file, 'r') as file:
+                        log_content = file.read()
+                    log_metadata = {
+                        "step_id": step_id,
+                        "log_type": log_type,
+                        "log_content": log_content,
+                        "timestamp": time.time()
+                    }
+                    for backend in self.storage_backends:
+                        backend.store_log(log_metadata)
+
+            # Stop monitoring if step is not running and 1 minute has passed
+            with self.lock:
+                if step_id not in self.running_steps and time.time() - self.running_steps.get(step_id, 0) > 60:
+                    break
+
+            time.sleep(10)
+
+    def monitor_steps(self, cluster_id: str):
+        """
+        Monitor and handle logs for all running steps.
+        """
+        while True:
+            self.fetch_running_steps(cluster_id)
+
+            for step_id in list(self.running_steps):
+                thread = threading.Thread(target=self.upload_logs, args=(step_id,))
+                thread.start()
+
+            time.sleep(10)  # Check for new steps every 10 seconds
 
 class SparkLogFileHandler(FileSystemEventHandler):
     def __init__(self, log_handler: SparkLogHandler):
@@ -181,6 +249,30 @@ class SparkLogFileHandler(FileSystemEventHandler):
     def on_created(self, event):
         if not event.is_directory:
             self.log_handler.index_log(event.src_path)
+            
+            
+def fetch_cluster_id() -> str:
+    """
+    Fetch the current EMR cluster ID using a bash command to parse job-flow.json.
+    """
+    try:
+        # Execute the bash command to fetch the cluster ID
+        result = subprocess.run(
+            ['jq', '-r', '.jobFlowId', '/mnt/var/lib/info/job-flow.json'],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        cluster_id = result.stdout.strip()
+        if not cluster_id:
+            raise ValueError("Cluster ID is empty")
+        logging.info(f"Fetched cluster ID: {cluster_id}")
+        return cluster_id
+    except Exception as e:
+        logging.error(f"Failed to fetch cluster ID: {e}")
+        raise RuntimeError("Unable to determine cluster ID")
+
 
 def main(config_file: str):
     """
@@ -191,6 +283,9 @@ def main(config_file: str):
     try:
         with open(config_file, 'r') as f:
             config = json.load(f)
+            
+        # Fetch the current cluster ID
+        cluster_id = fetch_cluster_id()
         
         # Initialize storage backends based on configuration
         storage_backends = []
@@ -206,13 +301,19 @@ def main(config_file: str):
         
         if not storage_backends:
             raise ValueError("No storage backends enabled in configuration")
+        
+        # Initialize EMR client
+        emr_client = boto3.client('emr', region_name=config['s3']['region'])
 
         # Initialize log handler with configured backends
+        # Start monitoring
         log_handler = SparkLogHandler(
             logs_dir=config['logs_dir'],
             storage_backends=storage_backends,
+            emr_client=emr_client,
             log_level=config.get('log_level', 'INFO')
         )
+        threading.Thread(target=log_handler.monitor_steps, args=(cluster_id,)).start()
 
         # Set up file system observer
         event_handler = SparkLogFileHandler(log_handler)
