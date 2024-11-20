@@ -1,5 +1,15 @@
 #!/bin/bash
 
+# Create a central log folder for bootstrap logs
+LOG_DIR="/tmp/yarn_monitor_bootstrap"
+mkdir -p "$LOG_DIR"
+LOG_FILE="$LOG_DIR/yarn_log_bootstrap.log"
+
+# Redirect all output to the log file
+exec > "$LOG_FILE" 2>&1
+
+echo "Bootstrap script started at $(date)"
+
 # Update the package list and install Python's package manager (pip)
 echo "Updating package list and installing Python's package manager (pip)"
 sudo yum update -y
@@ -12,12 +22,13 @@ sudo python3 -m pip install --upgrade pip
 
 # Install the required packages
 echo "Installing the required packages"
-sudo python3 -m pip install elasticsearch watchdog boto3 psycopg2-binary
+sudo python3 -m pip install elasticsearch watchdog boto3 psycopg2-binary awscli
 
-# Download yarn_monitor package from git
-echo "Downloading yarn_monitor package from git"
-git clone https://github.com/dev-redakai/yarn_monitor.git ~/yarn_monitor
+# Clone the yarn_monitor repository
+echo "Cloning the yarn_monitor package from GitHub"
+sudo git clone https://github.com/dev-redakai/yarn_monitor.git /home/hadoop/yarn_monitor
 
-# Start the script
-echo "Starting the log monitoring script"
-sudo python3 ~/yarn_monitor/yarn_log_monitor_with_conf.py ~/yarn_monitor/config/setup_conf.json &
+# Save logs for the Python monitoring script
+MONITOR_LOG="$LOG_DIR/yarn_log_monitoring.log"
+echo "Starting the log monitoring script, logs will be saved to $MONITOR_LOG"
+sudo python3 /home/hadoop/yarn_monitor/yarn_log_monitor_with_conf.py /home/hadoop/yarn_monitor/config/setup_conf.json >> "$MONITOR_LOG" 2>&1 &
