@@ -256,15 +256,15 @@ def fetch_cluster_id() -> str:
     Fetch the current EMR cluster ID using a bash command to parse job-flow.json.
     """
     try:
-        # Execute the bash command to fetch the cluster ID
-        result = subprocess.run(
-            ['jq', '-r', '.jobFlowId', '/mnt/var/lib/info/job-flow.json'],
-            check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
-        )
-        cluster_id = result.stdout.strip()
+        # Path to the job-flow.json file
+        json_file_path = '/mnt/var/lib/info/job-flow.json'
+        
+        # Read and parse the JSON file
+        with open(json_file_path, 'r') as file:
+            job_flow_data = json.load(file)
+            
+        # Extract the jobFlowId
+        cluster_id = job_flow_data.get('jobFlowId')
         if not cluster_id:
             raise ValueError("Cluster ID is empty")
         logging.info(f"Fetched cluster ID: {cluster_id}")
