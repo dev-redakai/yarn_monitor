@@ -14,5 +14,7 @@
 .idea
 .idea/*
 
-._pycache_
-._pycache_/*
+utility/_pycache_
+utility/_pycache_/*
+
+logs_yarn.py

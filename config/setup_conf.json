@@ -1,5 +1,5 @@
 {
-    "logs_dir": "/var/log/hadoop",
+    "logs_dir": "/var/log/hadoop/steps",
     "log_level": "INFO",
     
     "elasticsearch": {
