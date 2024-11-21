@@ -18,17 +18,17 @@ sudo yum install -y git
 
 # Upgrade pip to the latest version
 echo "Upgrading pip to the latest version"
-sudo python3 -m pip install --upgrade pip
+python3 -m pip install --upgrade pip
 
 # Install the required packages
 echo "Installing the required packages"
-sudo python3 -m pip install elasticsearch watchdog boto3 psycopg2-binary awscli
+python3 -m pip install elasticsearch watchdog boto3 psycopg2-binary awscli
 
 # Clone the yarn_monitor repository
 echo "Cloning the yarn_monitor package from GitHub"
-sudo git clone https://github.com/dev-redakai/yarn_monitor.git /home/hadoop/yarn_monitor
+git clone https://github.com/dev-redakai/yarn_monitor.git /home/hadoop/yarn_monitor
 
 # Save logs for the Python monitoring script
 MONITOR_LOG="$LOG_DIR/yarn_log_monitoring.log"
 echo "Starting the log monitoring script, logs will be saved to $MONITOR_LOG"
-sudo python3 /home/hadoop/yarn_monitor/yarn_log_monitor_with_conf.py /home/hadoop/yarn_monitor/config/setup_conf.json >> "$MONITOR_LOG" 2>&1 &
+python3 /home/hadoop/yarn_monitor/yarn_log_monitor_with_conf.py /home/hadoop/yarn_monitor/config/setup_conf.json >> "$MONITOR_LOG" 2>&1 &

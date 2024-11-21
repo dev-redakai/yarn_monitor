@@ -1,5 +1,5 @@
 {
-    "logs_dir": "/var/log/hadoop/steps",
+    "logs_dir": "/tmp/yarn_monitor_bootstrap",
     "log_level": "INFO",
     
     "elasticsearch": {
