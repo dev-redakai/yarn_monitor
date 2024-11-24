@@ -3,6 +3,8 @@
 # Create a central log folder for bootstrap logs
 LOG_DIR="/tmp/yarn_monitor_bootstrap"
 mkdir -p "$LOG_DIR"
+
+# Create a central log folder for application logs
 mkdir -p "/tmp/application_logs"
 LOG_FILE="$LOG_DIR/yarn_log_bootstrap.log"
 
