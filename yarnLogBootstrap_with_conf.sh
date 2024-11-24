@@ -3,6 +3,7 @@
 # Create a central log folder for bootstrap logs
 LOG_DIR="/tmp/yarn_monitor_bootstrap"
 mkdir -p "$LOG_DIR"
+mkdir -p "/tmp/application_logs"
 LOG_FILE="$LOG_DIR/yarn_log_bootstrap.log"
 
 # Redirect all output to the log file
@@ -29,6 +30,5 @@ echo "Cloning the yarn_monitor package from GitHub"
 git clone https://github.com/dev-redakai/yarn_monitor.git /home/hadoop/yarn_monitor
 
 # Save logs for the Python monitoring script
-MONITOR_LOG="$LOG_DIR/yarn_log_monitoring.log"
-echo "Starting the log monitoring script, logs will be saved to $MONITOR_LOG"
-python3 /home/hadoop/yarn_monitor/yarn_log_monitor_with_conf.py /home/hadoop/yarn_monitor/config/setup_conf.json >> "$MONITOR_LOG" 2>&1 &
+echo "Starting the log monitoring script, logs will be saved to $LOG_FILE"
+python3 /home/hadoop/yarn_monitor/yarn_log_monitor_with_conf.py /home/hadoop/yarn_monitor/config/setup_conf.json &

@@ -1,5 +1,5 @@
 {
-    "logs_dir": "/tmp/yarn_monitor_bootstrap",
+    "logs_dir": "/tmp/application_logs",
     "log_level": "INFO",
     
     "elasticsearch": {
