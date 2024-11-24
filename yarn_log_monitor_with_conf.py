@@ -3,6 +3,7 @@ import time
 import json,boto3
 import logging
 import datetime
+import re
 from typing import List, Dict, Any
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
@@ -21,6 +22,7 @@ class LogStorageBackend(ABC):
     def initialize(self) -> bool:
         """Initialize the storage backend"""
         pass
+
 
 class S3Backend(LogStorageBackend):
     def __init__(self, config: Dict[str, Any], cluster_id: str):
@@ -46,7 +48,7 @@ class S3Backend(LogStorageBackend):
         try:
             # Create S3 key based on application ID and timestamp
             timestamp = datetime.datetime.fromtimestamp(log_metadata['timestamp'])
-            s3_key = f"{self.prefix}/{timestamp.strftime('log_date=%Y-%m-%d')}/cluster_id={self.cluster_id}/step_id={log_metadata['step_id']}/{log_metadata['file_name']}"
+            s3_key = f"{self.prefix}/{timestamp.strftime('log_date=%Y-%m-%d')}/cluster_id={self.cluster_id}/application_id={log_metadata['application_id']}/{log_metadata['file_name']}"
             
             # Store both raw log content and metadata
             self.s3_client.put_object(
@@ -57,10 +59,11 @@ class S3Backend(LogStorageBackend):
             
             # Store metadata as separate JSON file
             metadata_key = f"{s3_key}.metadata.json"
+            metadata_content = {k: v for k, v in log_metadata.items() if k != 'log_content'}
             self.s3_client.put_object(
                 Bucket=self.bucket,
                 Key=metadata_key,
-                Body=json.dumps(log_metadata)
+                Body=json.dumps(metadata_content)
             )
             
             return True
@@ -90,24 +93,28 @@ class SparkLogHandler:
         for backend in storage_backends:
             if not backend.initialize():
                 self.logger.error(f"Failed to initialize {backend.__class__.__name__}")
+
+    def _extract_application_id(self, log_content: str) -> str:
+        """
+        Extract Spark application ID from log content
+        """
+        # Pattern to match Spark application ID (application_XXXXXXXXXX_XXXX)
+        app_id_pattern = r'(application_\d+_\d+)'
+        
+        match = re.search(app_id_pattern, log_content)
+        if match:
+            return match.group(1)
+        
+        return "unknown_application"
                 
     def _parse_log_metadata(self, log_path: str) -> Dict[str, Any]:
         """
-        Parse log metadata from Airflow/Hadoop log file path
-        
-        Expected structure:
-        /var/log/hadoop/steps/s-{STEP_ID}/{log_type}/...
-        
-        :param log_path: Path to log file
-        :return: Dictionary containing parsed metadata
+        Parse log metadata from Spark application log file
         """
         try:
             print(f"Parsing log metadata for {log_path}")
             # Split path into components
             parts = log_path.split(os.sep)
-            
-            # Extract step ID (format: s-XXXXXXXXXXXXXXXXX)
-            step_id = next((p for p in parts if p.startswith('s-')), None)
             
             # Determine log type (controller, stderr, stdout, syslog)
             log_type = next((p for p in parts if p in ['controller', 'stderr', 'stdout', 'syslog']), None)
@@ -117,12 +124,12 @@ class SparkLogHandler:
             max_retries = 5
             retry_count = 0
 
-            while log_content=='' and retry_count < max_retries:
+            while log_content == '' and retry_count < max_retries:
                 try:
                     with open(log_path, 'r', encoding='utf-8', errors='replace') as f:
                         log_content = f.read()
 
-                    if log_content=='':
+                    if log_content == '':
                         self.logger.debug(f"Empty log content on attempt {retry_count + 1}, retrying...")
                         print(f"Empty log content on attempt {retry_count + 1}, retrying...")
                         retry_count += 1
@@ -136,10 +143,13 @@ class SparkLogHandler:
                     retry_count += 1
                     time.sleep(1)
 
-            if log_content=='':
+            if log_content == '':
                 self.logger.warning(f"Failed to read log content after {retry_count} attempts")
                 print(f"Failed to read log content after {retry_count} attempts")
                 log_content = '##No Content##'
+	    # Extract application ID from log content
+            application_id = self._extract_application_id(log_content)
+
             self.logger.debug(f"Log content length: {len(log_content)}")
             print(f"Log content length: {len(log_content)}")
                 
@@ -150,7 +160,7 @@ class SparkLogHandler:
             metadata = {
                 'file_path': log_path,
                 'file_name': os.path.basename(log_path),
-                'step_id': step_id,
+                'application_id': application_id,
                 'log_type': log_type,
                 'timestamp': time.time(),
                 'created_at': file_stats.st_ctime,
@@ -158,10 +168,8 @@ class SparkLogHandler:
                 'file_size': file_stats.st_size,
                 'log_content': log_content,
                 'metadata': {
-                    'hadoop_root': '/var/log/hadoop',
-                    'is_step_log': 'steps' in parts,
                     'log_directory': os.path.dirname(log_path),
-                    'parent_directory': parts[-2] if len(parts) > 1 else None,
+                    'parent_directory': os.path.basename(os.path.dirname(log_path)),
                 }
             }
             
@@ -174,7 +182,7 @@ class SparkLogHandler:
             
             # Log successful parsing
             self.logger.debug(f"Successfully parsed metadata for {log_path}: "
-                            f"step_id={step_id}, log_type={log_type}")
+                            f"application_id={application_id}, log_type={log_type}")
             
             print(f"Metadata: {metadata}")
             
@@ -198,7 +206,7 @@ class SparkLogHandler:
             
             if log_metadata:
                 # Add some basic validation
-                required_fields = ['step_id', 'log_type', 'log_content']
+                required_fields = ['application_id', 'log_content']
                 missing_fields = [f for f in required_fields if not log_metadata.get(f)]
                 
                 if missing_fields:
@@ -212,7 +220,7 @@ class SparkLogHandler:
                         if success:
                             self.logger.info(
                                 f"Successfully stored log in {backend.__class__.__name__}: "
-                                f"{log_path} (step_id={log_metadata['step_id']}, "
+                                f"{log_path} (application_id={log_metadata['application_id']}, "
                                 f"type={log_metadata['log_type']})"
                             )
                         else:
@@ -244,9 +252,10 @@ class SparkLogFileHandler(FileSystemEventHandler):
         if not event.is_directory:
             self.log_handler.index_log(event.src_path)
 
+
 def fetch_cluster_id() -> str:
     """
-    Fetch the current EMR cluster ID using a bash command to parse job-flow.json.
+    Fetch the current EMR cluster ID using job-flow.json.
     """
     try:
         # Path to the job-flow.json file
@@ -265,6 +274,7 @@ def fetch_cluster_id() -> str:
     except Exception as e:
         logging.error(f"Failed to fetch cluster ID: {e}")
         raise RuntimeError("Unable to determine cluster ID")
+
 
 def main(config_file: str):
     try:
@@ -296,7 +306,7 @@ def main(config_file: str):
         observer.schedule(event_handler, config['logs_dir'], recursive=True)
 
         observer.start()
-        print(f"Monitoring {config['logs_dir']} for new log files...")
+        print(f"Monitoring {config['logs_dir']} for new Spark application logs...")
 
         while True:
             time.sleep(1)
@@ -307,6 +317,7 @@ def main(config_file: str):
     except Exception as e:
         print(f"Error: {e}")
         sys.exit(1)
+
 
 if __name__ == "__main__":
     import sys
