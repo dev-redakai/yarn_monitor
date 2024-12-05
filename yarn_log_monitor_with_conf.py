@@ -342,7 +342,7 @@ def monitor_emr_steps(emr: EMRCluster, log_manager: YarnLogManager):
         }
 
         previous_running_steps = current_running_steps
-        time.sleep(1)
+        time.sleep(10)
 
 
 def main(config_file: str):
