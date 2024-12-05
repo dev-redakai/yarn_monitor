@@ -41,7 +41,9 @@ class LogFileHandler(FileSystemEventHandler):
     def _process_log_file(self, file_path: str):
         try:
             filename = os.path.basename(file_path)
-            step_id, application_id = filename.replace('.log', '').split('_')
+            parts = filename.replace('.log', '').split('_')
+            step_id = parts[0]
+            application_id = '_'.join(parts[1:])
             log_content = self._read_log_file(file_path)
             errors = self._extract_errors(log_content)
 
