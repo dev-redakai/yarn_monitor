@@ -1,26 +1,109 @@
 import os
+import sys
 import time
-import json,boto3
+import json
+import boto3
 import logging
 import datetime
 import re
-from typing import List, Dict, Any
+import subprocess
+from typing import List, Dict, Any, Optional
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from abc import ABC, abstractmethod
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+
+class LogFileHandler(FileSystemEventHandler):
+    """Handler for monitoring log files"""
+
+    def __init__(self, storage_backends: List['LogStorageBackend']):
+        self.storage_backends = storage_backends
+
+    def on_created(self, event):
+        self._handle_event(event)
+
+    def on_modified(self, event):
+        self._handle_event(event)
+
+    def _handle_event(self, event):
+        if event.is_directory or not event.src_path.endswith('.log'):
+            return
+        logger.info(f"Log file event detected: {event.src_path}")
+        self._process_log_file(event.src_path)
+
+    def _process_log_file(self, file_path: str):
+        try:
+            filename = os.path.basename(file_path)
+            step_id, application_id = filename.replace('.log', '').split('_')
+            log_content = self._read_log_file(file_path)
+            errors = self._extract_errors(log_content)
+
+            log_metadata = self._construct_log_metadata(
+                file_path, filename, application_id, step_id, log_content, errors
+            )
+
+            self._store_logs(log_metadata, step_id, errors)
+
+        except Exception as e:
+            logger.error(f"Error processing log file {file_path}: {e}")
+
+    def _read_log_file(self, file_path: str) -> str:
+        with open(file_path, 'r') as f:
+            return f.read()
+
+    def _extract_errors(self, log_content: str) -> List[str]:
+        error_patterns = [r'ERROR', r'Exception', r'Failed', r'FAILED']
+        errors = []
+        for pattern in error_patterns:
+            matches = re.finditer(pattern, log_content, re.MULTILINE)
+            for match in matches:
+                line_start = log_content.rfind('\n', 0, match.start()) + 1
+                line_end = log_content.find('\n', match.end())
+                line_end = line_end if line_end != -1 else len(log_content)
+                errors.append(log_content[line_start:line_end].strip())
+        return errors
+
+    def _construct_log_metadata(self, file_path: str, filename: str, application_id: str, step_id: str,
+                                log_content: str, errors: List[str]) -> Dict[str, Any]:
+        return {
+            'file_path': file_path,
+            'file_name': filename,
+            'application_id': application_id,
+            'step_id': step_id,
+            'timestamp': time.time(),
+            'log_content': log_content,
+            'errors': errors,
+            'has_errors': len(errors) > 0
+        }
+
+    def _store_logs(self, log_metadata: Dict[str, Any], step_id: str, errors: List[str]):
+        for backend in self.storage_backends:
+            if not backend.store_log(log_metadata):
+                logger.error(f"Failed to store logs in backend {backend.__class__.__name__}")
+            else:
+                logger.info(f"Successfully stored logs for step {step_id}")
+                if errors:
+                    logger.error(f"Found {len(errors)} errors in step {step_id}:")
+                    for error in errors[:5]:
+                        logger.error(f"  - {error}")
+
 
 class LogStorageBackend(ABC):
     """Abstract base class for log storage backends"""
-    
+
     @abstractmethod
     def store_log(self, log_metadata: Dict[str, Any]) -> bool:
-        """Store log data in the backend"""
         pass
 
     @abstractmethod
     def initialize(self) -> bool:
-        """Initialize the storage backend"""
         pass
 
 
@@ -35,295 +118,250 @@ class S3Backend(LogStorageBackend):
 
     def initialize(self) -> bool:
         try:
-            self.s3_client = boto3.client(
-                's3',
-                region_name=self.config['region']
-            )
+            self.s3_client = boto3.client('s3', region_name=self.config.get('region', 'us-east-1'))
+            self.s3_client.list_buckets()
             return True
         except Exception as e:
             self.logger.error(f"S3 initialization error: {e}")
             return False
 
     def store_log(self, log_metadata: Dict[str, Any]) -> bool:
+        if not self.s3_client:
+            self.logger.error("S3 client not initialized")
+            return False
+
         try:
-            # Create S3 key based on application ID and timestamp
             timestamp = datetime.datetime.fromtimestamp(log_metadata['timestamp'])
-            s3_key = f"{self.prefix}/{timestamp.strftime('log_date=%Y-%m-%d')}/cluster_id={self.cluster_id}/application_id={log_metadata['application_id']}/{log_metadata['file_name']}"
-            
-            # Store both raw log content and metadata
-            self.s3_client.put_object(
-                Bucket=self.bucket,
-                Key=s3_key,
-                Body=log_metadata['log_content']
-            )
-            
-            # Store metadata as separate JSON file
-            metadata_key = f"{s3_key}.metadata.json"
-            metadata_content = {k: v for k, v in log_metadata.items() if k != 'log_content'}
-            self.s3_client.put_object(
-                Bucket=self.bucket,
-                Key=metadata_key,
-                Body=json.dumps(metadata_content)
-            )
-            
+            s3_key = self._generate_s3_key(log_metadata, timestamp)
+            self._store_log_content(log_metadata, s3_key)
+            self._store_log_metadata(log_metadata, s3_key)
+            self.logger.info(f"Successfully stored logs at s3://{self.bucket}/{s3_key}")
             return True
         except Exception as e:
             self.logger.error(f"Error storing log in S3: {e}")
             return False
 
+    def _generate_s3_key(self, log_metadata: Dict[str, Any], timestamp: datetime.datetime) -> str:
+        return (f"{self.prefix}/{timestamp.strftime('log_date=%Y-%m-%d')}/"
+                f"cluster_id={self.cluster_id}/step_id={log_metadata['step_id']}/"
+                f"application_id={log_metadata['application_id']}/{log_metadata['file_name']}")
 
-class SparkLogHandler:
-    def __init__(self, logs_dir: str, storage_backends: List[LogStorageBackend], log_level: str = 'INFO'):
-        """
-        Initialize SparkLogHandler with multiple storage backends
-        
-        :param logs_dir: Directory containing Spark/Hadoop user logs
-        :param storage_backends: List of storage backend instances
-        :param log_level: Logging level
-        """
-        logging.basicConfig(
-            level=getattr(logging, log_level.upper()),
-            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    def _store_log_content(self, log_metadata: Dict[str, Any], s3_key: str):
+        self.s3_client.put_object(
+            Bucket=self.bucket,
+            Key=s3_key,
+            Body=log_metadata['log_content']
         )
-        self.logger = logging.getLogger(__name__)
+
+    def _store_log_metadata(self, log_metadata: Dict[str, Any], s3_key: str):
+        metadata_key = f"{s3_key}.metadata.json"
+        metadata_content = {k: v for k, v in log_metadata.items() if k != 'log_content'}
+        self.s3_client.put_object(
+            Bucket=self.bucket,
+            Key=metadata_key,
+            Body=json.dumps(metadata_content)
+        )
+
+
+class EMRCluster:
+    def __init__(self):
+        self.cluster_id = None
+        self.emr_client = boto3.client('emr')
+
+    def initialize(self) -> bool:
+        try:
+            self.cluster_id = self._fetch_cluster_id()
+            return True
+        except Exception as e:
+            logger.error(f"Failed to initialize EMR cluster: {e}")
+            return False
+
+    def _fetch_cluster_id(self) -> str:
+        try:
+            json_file_path = '/mnt/var/lib/info/job-flow.json'
+            with open(json_file_path, 'r') as file:
+                job_flow_data = json.load(file)
+
+            cluster_id = job_flow_data.get('jobFlowId')
+            if not cluster_id:
+                raise ValueError("Cluster ID is empty")
+            logger.info(f"Fetched cluster ID: {cluster_id}")
+            return cluster_id
+        except Exception as e:
+            logger.error(f"Failed to fetch cluster ID: {e}")
+            raise RuntimeError("Unable to determine cluster ID")
+
+    def get_running_steps(self) -> List[Dict[str, Any]]:
+        try:
+            response = self.emr_client.list_steps(
+                ClusterId=self.cluster_id,
+                StepStates=['RUNNING', 'PENDING', 'FAILED']
+            )
+
+            steps = response.get('Steps', [])
+            return [
+                {
+                    'step_id': step['Id'],
+                    'name': step['Name'],
+                    'status': step['Status']['State'],
+                    'created_at': step['Status']['Timeline']['CreationDateTime'],
+                    'start_time': step['Status']['Timeline'].get('StartDateTime'),
+                    'action_on_failure': step['ActionOnFailure']
+                }
+                for step in steps
+            ]
+
+        except Exception as e:
+            logger.error(f"Error getting EMR steps: {e}")
+            return []
+
+
+class YarnLogManager:
+    def __init__(self, logs_dir: str, storage_backends: List[LogStorageBackend]):
         self.logs_dir = logs_dir
         self.storage_backends = storage_backends
-        
-        # Initialize all storage backends
-        for backend in storage_backends:
-            if not backend.initialize():
-                self.logger.error(f"Failed to initialize {backend.__class__.__name__}")
+        self.observer = Observer()
+        self.event_handler = LogFileHandler(storage_backends)
+        self.completed_steps = {}
 
-    def _extract_application_id(self, log_content: str) -> str:
-        """
-        Extract Spark application ID from log content
-        """
-        # Pattern to match Spark application ID (application_XXXXXXXXXX_XXXX)
+    def start_monitoring(self):
+        os.makedirs(self.logs_dir, exist_ok=True)
+        self.observer.schedule(self.event_handler, self.logs_dir, recursive=False)
+        self.observer.start()
+        logger.info(f"Started monitoring directory: {self.logs_dir}")
+
+    def stop_monitoring(self):
+        self.observer.stop()
+        self.observer.join()
+        logger.info("Stopped monitoring")
+
+    def extract_application_id(self, step_id: str) -> Optional[str]:
+        step_id_log_path = "/var/log/hadoop/steps"
+        log_dir = os.path.join(step_id_log_path, step_id)
+        if not os.path.exists(log_dir):
+            return None
+
         app_id_pattern = r'(application_\d+_\d+)'
-        
-        match = re.search(app_id_pattern, log_content)
-        if match:
-            return match.group(1)
-        
-        return "unknown_application"
-                
-    def _parse_log_metadata(self, log_path: str) -> Dict[str, Any]:
-        """
-        Parse log metadata from Spark application log file
-        """
-        try:
-            print(f"Parsing log metadata for {log_path}")
-            # Split path into components
-            parts = log_path.split(os.sep)
-            
-            # Determine log type (controller, stderr, stdout, syslog)
-            log_type = next((p for p in parts if p in ['controller', 'stderr', 'stdout', 'syslog']), None)
-            
-            # Read log content with retries
-            log_content = ''
-            max_retries = 5
-            retry_count = 0
-
-            while log_content == '' and retry_count < max_retries:
-                try:
-                    with open(log_path, 'r', encoding='utf-8', errors='replace') as f:
-                        log_content = f.read()
-
-                    if log_content == '':
-                        self.logger.debug(f"Empty log content on attempt {retry_count + 1}, retrying...")
-                        print(f"Empty log content on attempt {retry_count + 1}, retrying...")
-                        retry_count += 1
-                        time.sleep(1)
-                    else:
-                        self.logger.debug(f"Successfully read log content on attempt {retry_count + 1}")
-                        print(f"Successfully read log content on attempt {retry_count + 1}")
-                except Exception as e:
-                    self.logger.warning(f"Error reading log on attempt {retry_count + 1}: {str(e)}")
-                    print(f"Error reading log on attempt {retry_count + 1}: {str(e)}")
-                    retry_count += 1
-                    time.sleep(1)
-
-            if log_content == '':
-                self.logger.warning(f"Failed to read log content after {retry_count} attempts")
-                print(f"Failed to read log content after {retry_count} attempts")
-                log_content = '##No Content##'
-	    # Extract application ID from log content
-            application_id = self._extract_application_id(log_content)
-
-            self.logger.debug(f"Log content length: {len(log_content)}")
-            print(f"Log content length: {len(log_content)}")
-                
-            # Get file stats
-            file_stats = os.stat(log_path)
-            
-            # Build metadata dictionary
-            metadata = {
-                'file_path': log_path,
-                'file_name': os.path.basename(log_path),
-                'application_id': application_id,
-                'log_type': log_type,
-                'timestamp': time.time(),
-                'created_at': file_stats.st_ctime,
-                'modified_at': file_stats.st_mtime,
-                'file_size': file_stats.st_size,
-                'log_content': log_content,
-                'metadata': {
-                    'log_directory': os.path.dirname(log_path),
-                    'parent_directory': os.path.basename(os.path.dirname(log_path)),
-                }
-            }
-            
-            # Add additional parser metadata for debugging
-            metadata['parser_info'] = {
-                'path_parts': parts,
-                'parse_timestamp': datetime.datetime.now().isoformat(),
-                'parser_version': '1.0'
-            }
-            
-            # Log successful parsing
-            self.logger.debug(f"Successfully parsed metadata for {log_path}: "
-                            f"application_id={application_id}, log_type={log_type}")
-            
-            print(f"Metadata: {metadata}")
-            
-            return metadata
-
-        except Exception as e:
-            self.logger.error(f"Error parsing log metadata for {log_path}: {str(e)}", 
-                            exc_info=True)
-            return {}
-
-    def index_log(self, log_path: str):
-        """Index log file to all configured storage backends"""
-        try:
-            # Skip temporary or system files
-            if any(p in log_path for p in ['.tmp', '.swp', '.bak']):
-                self.logger.debug(f"Skipping temporary file: {log_path}")
-                return
-                
-            # Parse metadata
-            log_metadata = self._parse_log_metadata(log_path)
-            
-            if log_metadata:
-                # Add some basic validation
-                required_fields = ['application_id', 'log_content']
-                missing_fields = [f for f in required_fields if not log_metadata.get(f)]
-                
-                if missing_fields:
-                    self.logger.warning(f"Missing required fields {missing_fields} for {log_path}")
-                    return
-                    
-                # Store in each backend
-                for backend in self.storage_backends:
+        for root, _, files in os.walk(log_dir):
+            for file in files:
+                if file in ['controller', 'stderr', 'stdout', 'syslog']:
+                    file_path = os.path.join(root, file)
                     try:
-                        success = backend.store_log(log_metadata)
-                        if success:
-                            self.logger.info(
-                                f"Successfully stored log in {backend.__class__.__name__}: "
-                                f"{log_path} (application_id={log_metadata['application_id']}, "
-                                f"type={log_metadata['log_type']})"
-                            )
-                        else:
-                            self.logger.error(
-                                f"Failed to store log in {backend.__class__.__name__}: "
-                                f"{log_path}"
-                            )
-                    except Exception as be:
-                        self.logger.error(
-                            f"Backend {backend.__class__.__name__} error for {log_path}: {str(be)}",
-                            exc_info=True
-                        )
-            else:
-                self.logger.warning(f"No metadata could be parsed for {log_path}")
-                
+                        with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+                            log_content = f.read()
+                        match = re.search(app_id_pattern, log_content)
+                        if match:
+                            return match.group(1)
+                    except Exception as e:
+                        logger.warning(f"Error reading file {file_path}: {e}")
+        logger.info(f"No application ID found for step {step_id}")
+        return None
+
+    def fetch_logs(self, application_id: str, step_id: str) -> bool:
+        try:
+            output_file = os.path.join(self.logs_dir, f"{step_id}_{application_id}.log")
+            logger.info(f"Fetching YARN logs for application {application_id}")
+            cmd = f"yarn logs -applicationId {application_id}"
+            process = subprocess.Popen(
+                cmd.split(),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                universal_newlines=True
+            )
+            stdout, stderr = process.communicate()
+            if process.returncode != 0:
+                logger.error(f"Error fetching logs: {stderr}")
+                return False
+
+            with open(output_file, 'w') as f:
+                f.write(stdout)
+
+            logger.info(f"Successfully saved YARN logs to {output_file}")
+            return True
+
         except Exception as e:
-            self.logger.error(f"Error indexing log {log_path}: {str(e)}", exc_info=True)
+            logger.error(f"Error fetching YARN logs: {e}")
+            return False
 
 
-class SparkLogFileHandler(FileSystemEventHandler):
-    def __init__(self, log_handler: SparkLogHandler):
-        self.log_handler = log_handler
-
-    def on_created(self, event):
-        if not event.is_directory:
-            self.log_handler.index_log(event.src_path)
-            
-    def on_modified(self, event):
-        if not event.is_directory:
-            self.log_handler.index_log(event.src_path)
+def load_config(config_file: str) -> Dict[str, Any]:
+    with open(config_file, 'r') as f:
+        return json.load(f)
 
 
-def fetch_cluster_id() -> str:
-    """
-    Fetch the current EMR cluster ID using job-flow.json.
-    """
-    try:
-        # Path to the job-flow.json file
-        json_file_path = '/mnt/var/lib/info/job-flow.json'
-        
-        # Read and parse the JSON file
-        with open(json_file_path, 'r') as file:
-            job_flow_data = json.load(file)
-            
-        # Extract the jobFlowId
-        cluster_id = job_flow_data.get('jobFlowId')
-        if not cluster_id:
-            raise ValueError("Cluster ID is empty")
-        logging.info(f"Fetched cluster ID: {cluster_id}")
-        return cluster_id
-    except Exception as e:
-        logging.error(f"Failed to fetch cluster ID: {e}")
-        raise RuntimeError("Unable to determine cluster ID")
+def initialize_emr_cluster() -> EMRCluster:
+    emr = EMRCluster()
+    if not emr.initialize():
+        raise RuntimeError("Failed to initialize EMR cluster")
+    return emr
+
+
+def initialize_storage_backends(config: Dict[str, Any], emr: EMRCluster) -> List[LogStorageBackend]:
+    storage_backends = []
+    if config.get('s3', {}).get('enabled', False):
+        s3_backend = S3Backend(config['s3'], emr._fetch_cluster_id())
+        if s3_backend.initialize():
+            storage_backends.append(s3_backend)
+        else:
+            raise RuntimeError("Failed to initialize S3 backend")
+    if not storage_backends:
+        raise ValueError("No storage backends enabled in configuration")
+    return storage_backends
+
+
+def monitor_emr_steps(emr: EMRCluster, log_manager: YarnLogManager):
+    previous_running_steps = set()
+    while True:
+        current_steps = emr.get_running_steps()
+        current_running_steps = {step['step_id'] for step in current_steps}
+        completed_steps = previous_running_steps - current_running_steps
+
+        for step_id in completed_steps:
+            log_manager.completed_steps[step_id] = time.time()
+
+        all_steps_to_process = current_steps + [
+            {'step_id': step_id} for step_id, completion_time in list(log_manager.completed_steps.items())
+            if time.time() - completion_time <= 60
+        ]
+
+        for step in all_steps_to_process:
+            application_id = log_manager.extract_application_id(step['step_id'])
+            if application_id:
+                logger.info(f"Step ID: {step['step_id']}, Application ID: {application_id}")
+                log_manager.fetch_logs(application_id, step['step_id'])
+            else:
+                logger.warning(f"No application ID found for step {step['step_id']}")
+
+        current_time = time.time()
+        log_manager.completed_steps = {
+            step_id: completion_time
+            for step_id, completion_time in log_manager.completed_steps.items()
+            if current_time - completion_time <= 60
+        }
+
+        previous_running_steps = current_running_steps
+        time.sleep(1)
 
 
 def main(config_file: str):
+    config = load_config(config_file)
+    emr = initialize_emr_cluster()
+    storage_backends = initialize_storage_backends(config, emr)
+
+    log_manager = YarnLogManager(config['logs_dir'], storage_backends)
     try:
-        with open(config_file, 'r') as f:
-            config = json.load(f)
-        
-        # Fetch the current cluster ID
-        cluster_id = fetch_cluster_id()
-        
-        # Initialize storage backends based on configuration
-        storage_backends = []
-            
-        if config.get('s3', {}).get('enabled', False):
-            storage_backends.append(S3Backend(config['s3'], cluster_id))
-        
-        if not storage_backends:
-            raise ValueError("No storage backends enabled in configuration")
-
-        # Initialize log handler with configured backends
-        log_handler = SparkLogHandler(
-            logs_dir=config['logs_dir'],
-            storage_backends=storage_backends,
-            log_level=config.get('log_level', 'INFO')
-        )
-
-        # Set up file system observer
-        event_handler = SparkLogFileHandler(log_handler)
-        observer = Observer()
-        observer.schedule(event_handler, config['logs_dir'], recursive=True)
-
-        observer.start()
-        print(f"Monitoring {config['logs_dir']} for new Spark application logs...")
-
-        while True:
-            time.sleep(1)
-
+        log_manager.start_monitoring()
+        monitor_emr_steps(emr, log_manager)
     except KeyboardInterrupt:
-        observer.stop()
-        observer.join()
+        log_manager.stop_monitoring()
     except Exception as e:
-        print(f"Error: {e}")
-        sys.exit(1)
+        logger.error(f"Error in main loop: {e}")
+        log_manager.stop_monitoring()
+        raise
 
 
 if __name__ == "__main__":
-    import sys
-    
     if len(sys.argv) != 2:
-        print("Usage: python yarn_log_monitor_with_conf.py <config_file>")
+        print("Usage: python log_yarn.py config.json")
         sys.exit(1)
-        
     main(sys.argv[1])
