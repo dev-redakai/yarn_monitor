@@ -312,19 +312,25 @@ def initialize_storage_backends(config: Dict[str, Any], emr: EMRCluster) -> List
 
 
 def monitor_emr_steps(emr: EMRCluster, log_manager: YarnLogManager):
+    logger.info("Starting EMR steps monitoring")
     previous_running_steps = set()
     while True:
+        logger.debug("Fetching current running steps")
         current_steps = emr.get_running_steps()
         current_running_steps = {step['step_id'] for step in current_steps}
         completed_steps = previous_running_steps - current_running_steps
 
+        if completed_steps:
+            logger.info(f"Found {len(completed_steps)} newly completed steps")
         for step_id in completed_steps:
+            logger.debug(f"Recording completion time for step {step_id}")
             log_manager.completed_steps[step_id] = time.time()
 
         all_steps_to_process = current_steps + [
             {'step_id': step_id} for step_id, completion_time in list(log_manager.completed_steps.items())
             if time.time() - completion_time <= 60
         ]
+        logger.debug(f"Processing {len(all_steps_to_process)} steps")
 
         for step in all_steps_to_process:
             application_id = log_manager.extract_application_id(step['step_id'])
@@ -335,14 +341,18 @@ def monitor_emr_steps(emr: EMRCluster, log_manager: YarnLogManager):
                 logger.warning(f"No application ID found for step {step['step_id']}")
 
         current_time = time.time()
+        original_count = len(log_manager.completed_steps)
         log_manager.completed_steps = {
             step_id: completion_time
             for step_id, completion_time in log_manager.completed_steps.items()
             if current_time - completion_time <= 60
         }
+        if original_count != len(log_manager.completed_steps):
+            logger.debug(f"Cleaned up {original_count - len(log_manager.completed_steps)} expired completed steps")
 
         previous_running_steps = current_running_steps
-        time.sleep(10)
+        logger.debug("Waiting for next monitoring cycle")
+        time.sleep(30)
 
 
 def main(config_file: str):
@@ -364,6 +374,6 @@ def main(config_file: str):
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
-        print("Usage: python log_yarn.py config.json")
+        print("Usage: python yarn_log_monitor_with_conf.py config.json")
         sys.exit(1)
     main(sys.argv[1])
