@@ -1,203 +1,212 @@
-# YARN Log Monitor
+# YARN Log Monitor for EMR Clusters
 
-A robust Python-based monitoring system for Apache YARN and Spark logs with flexible storage backend support. This tool automatically detects new log files and stores them in your choice of Elasticsearch, Amazon S3, or PostgreSQL (or any combination of these).
+## Overview
+
+The YARN Log Monitor is a sophisticated Python script designed to automatically monitor, capture, and store log files from Amazon EMR (Elastic MapReduce) cluster steps. It provides a robust solution for log management that helps track and analyze step executions by:
+
+- Monitoring log files in real-time
+- Extracting application IDs for EMR steps
+- Fetching YARN logs
+- Storing logs in multiple backends (currently supporting Amazon S3)
+- Tracking running and completed steps
 
 ## Features
 
-- 🔍 Real-time monitoring of YARN/Spark log directories
-- 📦 Multiple storage backend support:
-  - Elasticsearch for full-text search capabilities
-  - Amazon S3 for durable cloud storage
-  - PostgreSQL for structured data storage
-- 🔄 Concurrent storage to multiple backends
-- 📂 Organized storage structure with metadata preservation
-- 🚀 Easy configuration via JSON
-- 📝 Comprehensive logging and error handling
-- 🔌 Modular design for easy extension
+- Real-time log file monitoring using watchdog
+- Automatic log file processing
+- Error extraction from log files
+- Multiple storage backend support (S3)
+- EMR cluster step tracking
+- Configurable log storage and monitoring
 
 ## Prerequisites
 
 - Python 3.7+
-- Access to one or more of the following:
-  - Elasticsearch cluster
-  - AWS S3 bucket
-  - PostgreSQL database
-- YARN/Spark cluster with accessible log directory
+- boto3 library
+- watchdog library
+- AWS credentials with appropriate EMR and S3 permissions
+- Running on an EMR cluster
 
-## Installation
+## Installation and Deployment
+
+### Manual Installation
 
 1. Clone the repository:
-```bash
-git clone https://github.com/dev-redakai/yarn_monitor.git
-cd yarn-log-monitor
-```
+   ```bash
+   git clone https://github.com/dev-redakai/yarn_monitor.git
+   cd yarn-log-monitor
+   ```
 
-2. Create and activate a virtual environment (recommended):
-```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-```
+2. Install required dependencies:
+   ```bash
+   pip install boto3 watchdog
+   ```
 
-3. Install required dependencies:
-```bash
-pip install -r requirements.txt
-```
+### EMR Bootstrap Script Deployment
+
+The project includes a comprehensive bootstrap script that automates the installation and setup of the YARN Log Monitor on Amazon EMR clusters. This script provides a robust, automated way to deploy the monitoring solution.
+
+#### Bootstrap Script Features
+
+- Automatic package installation
+- Error handling and retry mechanisms
+- Parallel package installation
+- Logging of installation process
+- Background script execution
+
+#### Using the Bootstrap Script
+
+When creating an EMR cluster, you can specify this bootstrap script to automatically set up the YARN Log Monitor:
+
+1. Save the bootstrap script (provided in the repository) to a location accessible by your EMR cluster (e.g., S3 bucket)
+
+2. When creating your EMR cluster, add the bootstrap script under "Bootstrap Actions":
+   - Action type: Custom action
+   - Script location: `s3://your-bucket/path/to/bootstrap_script.sh`
+
+3. Ensure the EMR cluster's IAM role has necessary permissions:
+   - S3 read access
+   - Ability to install packages
+   - Network access to required repositories
+
+#### Bootstrap Script Workflow
+
+1. Installs system and Python packages
+2. Clones the YARN Log Monitor repository
+3. Installs Python dependencies
+4. Starts the monitoring script in the background
+5. Logs all installation and startup activities
+
+**Note**: The bootstrap script assumes the repository URL and configuration file path. Modify these to match your specific setup.
 
 ## Configuration
 
-Create a `config.json` file with your desired settings. Example configuration:
+Create a `config.json` file with the following structure:
 
 ```json
 {
-    "logs_dir": "/path/to/yarn/logs/userlogs",
-    "log_level": "INFO",
-    
-    "elasticsearch": {
-        "enabled": true,
-        "host": "localhost",
-        "port": 9200,
-        "scheme": "https",
-        "user": "elastic",
-        "password": "your-password",
-        "index": "yarn_logs"
-    },
-    
+    "logs_dir": "/path/to/dump/local/logs/directory",
     "s3": {
         "enabled": true,
-        "aws_access_key_id": "your-access-key",
-        "aws_secret_access_key": "your-secret-key",
-        "region": "us-west-2",
-        "bucket": "your-bucket-name",
-        "prefix": "yarn-logs"
-    },
-    
-    "postgres": {
-        "enabled": true,
-        "host": "localhost",
-        "port": 5432,
-        "dbname": "yarn_logs",
-        "user": "postgres",
-        "password": "your-password"
+        "bucket": "your-s3-bucket-name",
+        "prefix": "yarn-logs",
+        "region": "us-east-1"
     }
 }
 ```
 
-### Configuration Options
+### Configuration Parameters
 
-#### General Settings
-- `logs_dir`: Directory path containing YARN/Spark logs
-- `log_level`: Logging level (INFO, DEBUG, WARNING, ERROR)
-
-#### Elasticsearch Settings
-- `enabled`: Enable/disable Elasticsearch storage
-- `host`: Elasticsearch host
-- `port`: Elasticsearch port
-- `scheme`: Connection scheme (http/https)
-- `user`: Elasticsearch username
-- `password`: Elasticsearch password
-- `index`: Index name for storing logs
-
-#### S3 Settings
-- `enabled`: Enable/disable S3 storage
-- `aws_access_key_id`: AWS access key
-- `aws_secret_access_key`: AWS secret key
-- `region`: AWS region
-- `bucket`: S3 bucket name
-- `prefix`: Prefix for log files in bucket (optional)
-
-#### PostgreSQL Settings
-- `enabled`: Enable/disable PostgreSQL storage
-- `host`: PostgreSQL host
-- `port`: PostgreSQL port
-- `dbname`: Database name
-- `user`: PostgreSQL username
-- `password`: PostgreSQL password
+- `logs_dir`: Local directory to store captured log files
+- `s3.enabled`: Enable/disable S3 backend storage
+- `s3.bucket`: S3 bucket name for log storage
+- `s3.prefix`: Prefix for S3 object keys
+- `s3.region`: AWS region for S3 bucket
 
 ## Usage
 
-1. Start the monitor:
+Run the script directly on your EMR cluster:
+
 ```bash
-python yarn_log_monitor.py config.json
+python yarn_log_monitor_with_conf.py config.json
 ```
 
-2. The monitor will:
-   - Watch for new log files in the specified directory
-   - Parse log metadata and content
-   - Store logs in enabled backends
-   - Provide real-time feedback via logging
+## How It Works
 
-## Storage Structure
+1. **Initialization**
+   - Loads configuration from the specified JSON file
+   - Initializes EMR cluster information
+   - Sets up storage backends (currently S3)
 
-### Elasticsearch
-- Logs are stored as documents in the specified index
-- Each document contains:
-  - File path
-  - Application ID
-  - Container ID
-  - Timestamp
-  - Log content
-  - Full metadata
+2. **Log Monitoring**
+   - Watches a specified directory for new or modified `.log` files
+   - Extracts metadata from log filenames
+   - Processes log files to identify errors
 
-### Amazon S3
-- Logs are organized in a hierarchical structure:
-  ```
-  bucket/
-  └── prefix/
-      └── YYYY/
-          └── MM/
-              └── DD/
-                  └── application_id/
-                      ├── log_file
-                      └── log_file.metadata.json
-  ```
+3. **Step Tracking**
+   - Monitors running EMR cluster steps
+   - Extracts application IDs for completed steps
+   - Fetches YARN logs for identified steps
 
-### PostgreSQL
-- Logs are stored in a table with the following schema:
-  ```sql
-  CREATE TABLE yarn_logs (
-      id SERIAL PRIMARY KEY,
-      file_path VARCHAR(1024),
-      file_name VARCHAR(256),
-      application_id VARCHAR(256),
-      container_id VARCHAR(256),
-      timestamp TIMESTAMP,
-      log_content TEXT,
-      metadata JSONB
-  )
-  ```
+4. **Log Storage**
+   - Stores log content in configured backends
+   - Creates separate metadata files for easy indexing
+   - Supports extensible storage backend architecture
 
-## Development
+## Error Handling
 
-### Adding a New Storage Backend
+The script includes comprehensive error handling:
+- Logs errors and warnings
+- Continues operation even if individual step log processing fails
+- Provides detailed logging for troubleshooting
 
-1. Create a new class that inherits from `LogStorageBackend`
-2. Implement the required methods:
-   - `initialize()`
-   - `store_log()`
-3. Add configuration handling in the main function
+## Logging
 
-Example:
-```python
-class NewBackend(LogStorageBackend):
-    def __init__(self, config: Dict[str, Any]):
-        self.config = config
-        
-    def initialize(self) -> bool:
-        # Initialize connection/client
-        pass
-        
-    def store_log(self, log_metadata: Dict[str, Any]) -> bool:
-        # Store log data
-        pass
+Utilizes Python's logging module with:
+- Timestamp
+- Log level
+- Detailed error messages
+- Console output
+
+## Security Considerations
+
+- Requires AWS credentials with appropriate permissions
+- Stores logs securely in S3
+- Handles log file reading with error tolerance
+
+## Extending the Project
+
+### Adding New Storage Backends
+- Implement a new class inheriting from `LogStorageBackend`
+- Override `store_log()` and `initialize()` methods
+- Add backend initialization in `initialize_storage_backends()`
+
+### Customizing the Bootstrap Script
+
+The bootstrap script can be extended to support more complex deployment scenarios:
+
+1. **Package Management**
+   - Add more package installations
+   - Configure custom package sources
+   - Add package version pinning
+
+2. **Configuration Management**
+   - Support dynamic configuration generation
+   - Add configuration validation
+   - Implement configuration templating
+
+3. **Error Handling**
+   - Enhance logging capabilities
+   - Add more detailed error reporting
+   - Implement advanced retry mechanisms
+
+4. **Security Enhancements**
+   - Add credential management
+   - Implement additional security checks
+   - Support encryption of sensitive information
+
+Example of extending the bootstrap script:
+```bash
+# Add custom package installation
+python3 -m pip install additional-package1 additional-package2
+
+# Dynamic configuration generation
+python3 generate_config.py > /home/hadoop/yarn_monitor/config/dynamic_config.json
+
+# Enhanced logging
+exec > >(tee -a "$EXTENDED_LOG_FILE") 2>&1
 ```
 
-## Contributing
+## Limitations
 
-1. Fork the repository
-2. Create a feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a Pull Request
+- Currently supports only S3 as a storage backend
+- Designed specifically for EMR clusters
+- Requires running on the EMR cluster node
+
+
+## Disclaimer
+
+Ensure you have appropriate AWS permissions and understand the potential costs associated with log storage and processing.
 
 ## License
 
@@ -206,10 +215,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## Acknowledgments
 
 - Built with [watchdog](https://github.com/gorakhargosh/watchdog) for file system monitoring
-- Uses [elasticsearch-py](https://github.com/elastic/elasticsearch-py) for Elasticsearch integration
 - Uses [boto3](https://github.com/boto/boto3) for AWS S3 integration
-- Uses [psycopg2](https://github.com/psycopg/psycopg2) for PostgreSQL integration
-
 ---
 
 ## Support
