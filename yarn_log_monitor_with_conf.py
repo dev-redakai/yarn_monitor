@@ -23,8 +23,9 @@ logger = logging.getLogger(__name__)
 class LogFileHandler(FileSystemEventHandler):
     """Handler for monitoring log files"""
 
-    def __init__(self, storage_backends: List['LogStorageBackend']):
+    def __init__(self, storage_backends: List['LogStorageBackend'], cluster_id: str):
         self.storage_backends = storage_backends
+        self.cluster_id = cluster_id
 
     def on_created(self, event):
         self._handle_event(event)
@@ -80,6 +81,8 @@ class LogFileHandler(FileSystemEventHandler):
             'application_id': application_id,
             'step_id': step_id,
             'timestamp': time.time(),
+            'log_date': datetime.datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d'),
+            'cluster_id': self.cluster_id,
             'log_content': log_content,
             'errors': errors,
             'has_errors': len(errors) > 0
@@ -144,8 +147,8 @@ class S3Backend(LogStorageBackend):
             return False
 
     def _generate_s3_key(self, log_metadata: Dict[str, Any], timestamp: datetime.datetime) -> str:
-        return (f"{self.prefix}/{timestamp.strftime('log_date=%Y-%m-%d')}/"
-                f"cluster_id={self.cluster_id}/step_id={log_metadata['step_id']}/"
+        return (f"{self.prefix}/"
+                f"step_id={log_metadata['step_id']}/"
                 f"application_id={log_metadata['application_id']}/{log_metadata['file_name']}")
 
     def _store_log_content(self, log_metadata: Dict[str, Any], s3_key: str):
@@ -219,11 +222,11 @@ class EMRCluster:
 
 
 class YarnLogManager:
-    def __init__(self, logs_dir: str, storage_backends: List[LogStorageBackend]):
+    def __init__(self, logs_dir: str, storage_backends: List[LogStorageBackend], cluster_id: str):
         self.logs_dir = logs_dir
         self.storage_backends = storage_backends
         self.observer = Observer()
-        self.event_handler = LogFileHandler(storage_backends)
+        self.event_handler = LogFileHandler(storage_backends, cluster_id)
         self.completed_steps = {}
 
     def start_monitoring(self):
@@ -359,8 +362,9 @@ def main(config_file: str):
     config = load_config(config_file)
     emr = initialize_emr_cluster()
     storage_backends = initialize_storage_backends(config, emr)
+    cluster_id = emr._fetch_cluster_id()
 
-    log_manager = YarnLogManager(config['logs_dir'], storage_backends)
+    log_manager = YarnLogManager(config['logs_dir'], storage_backends, cluster_id)
     try:
         log_manager.start_monitoring()
         monitor_emr_steps(emr, log_manager)
